@@ -15,15 +15,23 @@ C++ OpenGL renderer project built with CMake. The current app opens a GLFW windo
 
 ## External libraries
 
-The project is set up to use third-party code from `external/` in the local working tree.
+The project can use third-party code from `external/` when those folders already exist locally, but a clean clone does not require them anymore.
 
 - `external/assimp`: imports mesh and material data from model files. The current renderer uses it to load the Sponza OBJ scene into the project's raw scene structures.
 - `external/glad`: loads OpenGL function pointers at runtime so the application can call modern OpenGL APIs after creating a context.
 - `external/glfw`: creates the window and OpenGL context, and handles input and the main event loop.
 - `external/glm`: provides vector and matrix math used for transforms, camera state, and projection/view calculations.
-- `external/stb_image.h` and `external/stb_image.cpp`: load texture image files into CPU memory before uploading them to OpenGL textures.
+- `external/stb_image.h`: loads texture image files into CPU memory before uploading them to OpenGL textures.
 
-In this repo configuration, these dependencies are expected to exist under `external/` locally, but they are not intended to be tracked by git here. A fresh clone may require those directories or files to be provided separately.
+If those directories are missing, CMake now fetches them during configure from their upstream repositories. The fetched set is:
+
+- GLFW `3.4`
+- Assimp `v6.0.4`
+- GLM `1.0.3`
+- GLAD `v0.1.36` generated through the upstream CMake helper
+- `stb` from `master` for `stb_image.h`
+
+For the fetched GLAD path, Python is required at configure time because the loader source is generated locally.
 
 ## Assets
 
@@ -36,7 +44,7 @@ Like the local dependency directories above, the Sponza scene directory is expec
 
 ## Build
 
-This project is currently configured for Windows linking through `opengl32`.
+This project uses CMake `FetchContent` for missing third-party libraries and links OpenGL through `find_package(OpenGL)`.
 
 ```powershell
 cmake -S . -B out/build

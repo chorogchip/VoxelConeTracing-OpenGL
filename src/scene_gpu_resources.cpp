@@ -1,59 +1,44 @@
 #include "scene_gpu_resources.h"
 
+#include <cstddef>
+#include <iostream>
+
 #include <glad/glad.h>
-#include <GLFW/glfw3.h>
-#include <glm/glm.hpp>
-#include <stb_image.h>
 
 #include "graphics_util.h"
 
 namespace {
+    constexpr const char* VERTEX_SHADER_PATH = "assets/shaders/scene.vert";
+    constexpr const char* FRAGMENT_SHADER_PATH = "assets/shaders/scene.frag";
 
-    static constexpr char* VERTEX_SHADER_SOURCE = R"(
-#version 330 core
-layout (location = 0) in vec3 aPos;
-layout (location = 1) in vec2 aTexCoord;
-layout (location = 2) in vec3 aNormal;
+    uint32_t create_fallback_texture() {
+        uint32_t texture = 0;
+        glGenTextures(1, &texture);
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
-out vec2 TexCoord;
-out vec3 Normal;
-
-uniform mat4 model;
-uniform mat4 view;
-uniform mat4 projection;
-
-void main() {
-    gl_Position = projection * view * model * vec4(aPos, 1.0);
-    TexCoord = aTexCoord;
-    Normal = mat3(transpose(inverse(model))) * aNormal;
-}
-)";
-
-    static constexpr char* FRAGMENT_SHADER_SOURCE = R"(
-#version 330 core
-
-out vec4 FragColor;
-
-in vec2 TexCoord;
-in vec3 Normal;
-
-uniform sampler2D uTexture;
-
-void main() {
-    vec3 debugNormal = normalize(Normal) * 0.5 + 0.5;
-    FragColor = texture(uTexture, TexCoord);
-}
-)";
+        constexpr unsigned char white_pixel[] = { 255, 255, 255, 255 };
+        glTexImage2D(
+            GL_TEXTURE_2D, 0, GL_RGBA,
+            1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, white_pixel);
+        return texture;
+    }
 }
 
 
 namespace chr {
 
     int SceneGPUResources::init(const SceneRaw& scene_raw) {
+        clear();
 
-        unsigned vertex_shader = graphics_util::compile_shader(GL_VERTEX_SHADER, VERTEX_SHADER_SOURCE);
+        unsigned vertex_shader = graphics_util::compile_shader_from_file(
+            GL_VERTEX_SHADER, VERTEX_SHADER_PATH);
         if (vertex_shader == 0) return -1;
-        unsigned fragment_shader = graphics_util::compile_shader(GL_FRAGMENT_SHADER, FRAGMENT_SHADER_SOURCE);
+        unsigned fragment_shader = graphics_util::compile_shader_from_file(
+            GL_FRAGMENT_SHADER, FRAGMENT_SHADER_PATH);
         if (fragment_shader == 0) {
             glDeleteShader(vertex_shader);
             return -1;
@@ -77,6 +62,11 @@ namespace chr {
         glDeleteShader(vertex_shader);
         glDeleteShader(fragment_shader);
         this->shader_program = shader_program;
+        this->uniform_model = glGetUniformLocation(this->shader_program, "model");
+        this->uniform_view = glGetUniformLocation(this->shader_program, "view");
+        this->uniform_projection = glGetUniformLocation(this->shader_program, "projection");
+        this->uniform_texture_diffuse = glGetUniformLocation(this->shader_program, "uTexture");
+        this->fallback_texture_diffuse = create_fallback_texture();
 
         for (const auto& mesh_raw : scene_raw.meshes) {
 
@@ -115,41 +105,77 @@ namespace chr {
         }
 
         for (const auto& material_raw : scene_raw.materials) {
-
-            unsigned texture;
-            glGenTextures(1, &texture);
-            glBindTexture(GL_TEXTURE_2D, texture);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-            {
-                int tex_width, tex_height, tex_channels;
-                stbi_set_flip_vertically_on_load(true);
-                unsigned char* data = stbi_load("assets/texture.png",
-                    &tex_width, &tex_height, &tex_channels, 0);
-                if (data != nullptr) {
-                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, tex_width, tex_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
-                    glGenerateMipmap(GL_TEXTURE_2D);
-                    stbi_image_free(data);
-                }
-                else {
-                    std::cout << "Failed to load texture" << std::endl;
-                    return -1;
-                }
-            }
+            const uint32_t texture_diffuse =
+                graphics_util::load_texture_2d(material_raw.texture_diffuse);
+            this->materials.push_back({
+                texture_diffuse != 0 ? texture_diffuse : this->fallback_texture_diffuse,
+                0,
+                0
+            });
         }
 
         return 0;
     }
 
     void SceneGPUResources::clear() {
+        for (const auto& mesh : this->meshes) {
+            glDeleteVertexArrays(1, &mesh.VAO);
+            glDeleteBuffers(1, &mesh.VBO);
+            glDeleteBuffers(1, &mesh.EBO);
+        }
+        this->meshes.clear();
 
+        for (const auto& material : this->materials) {
+            if (material.texture_diffuse != 0 &&
+                material.texture_diffuse != this->fallback_texture_diffuse) {
+                glDeleteTextures(1, &material.texture_diffuse);
+            }
+        }
+        this->materials.clear();
+
+        if (this->fallback_texture_diffuse != 0) {
+            glDeleteTextures(1, &this->fallback_texture_diffuse);
+            this->fallback_texture_diffuse = 0;
+        }
+
+        if (this->shader_program != 0) {
+            glDeleteProgram(this->shader_program);
+            this->shader_program = 0;
+        }
+
+        this->uniform_model = -1;
+        this->uniform_view = -1;
+        this->uniform_projection = -1;
+        this->uniform_texture_diffuse = -1;
     }
 
-    void SceneGPUResources::bind() {
+    void SceneGPUResources::draw(const SceneDrawParams& draw_params)
+    {
+        glUseProgram(this->shader_program);
+        glUniform1i(this->uniform_texture_diffuse, 0);
+        glUniformMatrix4fv(
+            this->uniform_model,
+            1, GL_FALSE, &draw_params.mat_model[0][0]);
+        glUniformMatrix4fv(
+            this->uniform_view,
+            1, GL_FALSE, &draw_params.mat_view[0][0]);
+        glUniformMatrix4fv(
+            this->uniform_projection,
+            1, GL_FALSE, &draw_params.mat_projection[0][0]);
 
+        for (const auto& mesh : this->meshes) {
+            uint32_t texture_diffuse = this->fallback_texture_diffuse;
+            if (mesh.material_index < this->materials.size()) {
+                texture_diffuse = this->materials[mesh.material_index].texture_diffuse;
+            }
+
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, texture_diffuse);
+            glBindVertexArray(mesh.VAO);
+            glDrawElements(GL_TRIANGLES, mesh.index_count, GL_UNSIGNED_INT, nullptr);
+        }
+
+        glBindVertexArray(0);
     }
 
 }
