@@ -1,0 +1,9 @@
+우선 삼각형을 띄워보기로 한다
+그뒤 assimp안쓰고 obj파일을 구해서 자체적으로 로딩해보자
+
+
+모델로딩시 참고할만한것
+https://en.wikibooks.org/wiki/OpenGL_Programming/Modern_OpenGL_Tutorial_06
+
+obj파일의 명세
+https://www.loc.gov/preservation/digital/formats/fdd/fdd000507.shtml

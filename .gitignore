@@ -1,0 +1,38 @@
+.vs/
+
+# Local third-party dependencies you do not want to commit
+/external/assimp/
+/external/glad/
+/external/glfw/
+/external/glm/
+/external/stb_image.cpp
+/external/stb_image.h
+
+# Large local assets you do not want to commit
+/assets/Sponza-master/
+
+# CMake and generated build outputs
+/out/
+/build/
+/cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+CTestTestfile.cmake
+Testing/
+
+# Generated binaries and libraries
+*.exe
+*.dll
+*.lib
+*.exp
+*.obj
+*.pdb
+*.ilk
+
+# IDE and OS noise
+*.VC.db
+*.VC.opendb
+Thumbs.db
+.DS_Store
