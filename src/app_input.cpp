@@ -12,7 +12,9 @@ namespace {
 
     chr::Camera* g_camera = nullptr;
     bool g_toggle_debug_views_requested = false;
+    bool g_toggle_light_markers_requested = false;
     bool g_prev_p_pressed = false;
+    bool g_prev_o_pressed = false;
     bool g_is_dragging = false;
     bool g_has_drag_origin = false;
     double g_last_mouse_x = 0.0;
@@ -70,7 +72,9 @@ namespace app_input {
 
         g_camera = camera;
         g_toggle_debug_views_requested = false;
+        g_toggle_light_markers_requested = false;
         g_prev_p_pressed = false;
+        g_prev_o_pressed = false;
         g_is_dragging = false;
         g_has_drag_origin = false;
 
@@ -94,6 +98,12 @@ namespace app_input {
         }
         g_prev_p_pressed = is_p_pressed;
 
+        const bool is_o_pressed = glfwGetKey(window, GLFW_KEY_O) == GLFW_PRESS;
+        if (is_o_pressed && !g_prev_o_pressed) {
+            g_toggle_light_markers_requested = true;
+        }
+        g_prev_o_pressed = is_o_pressed;
+
         if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
             g_camera->position += CAMERA_MOVE_SPEED * g_camera->dir_front;
         if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
@@ -111,6 +121,12 @@ namespace app_input {
     bool consume_toggle_debug_views_requested() {
         const bool requested = g_toggle_debug_views_requested;
         g_toggle_debug_views_requested = false;
+        return requested;
+    }
+
+    bool consume_toggle_light_markers_requested() {
+        const bool requested = g_toggle_light_markers_requested;
+        g_toggle_light_markers_requested = false;
         return requested;
     }
 

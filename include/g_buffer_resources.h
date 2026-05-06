@@ -12,6 +12,8 @@ namespace chr {
         uint32_t texture_albedo = 0;
         uint32_t texture_normal = 0;
         uint32_t texture_depth = 0;
+        uint32_t shadow_framebuffer = 0;
+        uint32_t shadow_texture_depth = 0;
         uint32_t quad_vao = 0;
         uint32_t quad_vbo = 0;
         uint32_t light_marker_vao = 0;
@@ -24,7 +26,10 @@ namespace chr {
         int uniform_g_albedo = -1;
         int uniform_g_normal = -1;
         int uniform_g_depth = -1;
+        int uniform_shadow_map = -1;
         int uniform_inverse_projection = -1;
+        int uniform_inverse_view = -1;
+        int uniform_light_view_projection = -1;
         int uniform_light_direction = -1;
         int uniform_light_color = -1;
         int uniform_ambient_strength = -1;
@@ -44,6 +49,8 @@ namespace chr {
         int init(int width, int height);
         int resize(int width, int height);
         void clear();
+        glm::mat4 get_directional_light_view_projection() const;
+        void bind_for_shadow_pass();
         void bind_for_geometry_pass();
         void draw_lighting_pass(const glm::mat4& mat_projection, const glm::mat4& mat_view);
         void draw_light_markers(const glm::mat4& mat_projection, const glm::mat4& mat_view);

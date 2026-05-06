@@ -17,6 +17,12 @@ namespace {
     constexpr const char* LIGHT_MARKER_FRAGMENT_SHADER_PATH = "assets/shaders/light_marker.frag";
     const glm::vec3 LIGHT_DIRECTION = glm::normalize(glm::vec3(-0.6f, -1.0f, -0.35f));
     const glm::vec3 LIGHT_COLOR = glm::vec3(1.0f, 0.98f, 0.92f);
+    constexpr int SHADOW_MAP_SIZE = 2048;
+    constexpr float SHADOW_ORTHO_HALF_EXTENT = 18.0f;
+    constexpr float SHADOW_NEAR_PLANE = 1.0f;
+    constexpr float SHADOW_FAR_PLANE = 60.0f;
+    constexpr float SHADOW_LIGHT_DISTANCE = 24.0f;
+    const glm::vec3 SHADOW_TARGET = glm::vec3(0.0f, 6.0f, 0.0f);
     constexpr float AMBIENT_STRENGTH = 0.32f;
     constexpr float DIFFUSE_STRENGTH = 0.85f;
     constexpr int POINT_LIGHT_COUNT = 5;
@@ -61,6 +67,16 @@ namespace {
             2.5f
         }
     }};
+
+    glm::mat4 get_directional_light_view_projection_matrix() {
+        const glm::vec3 light_position = SHADOW_TARGET - LIGHT_DIRECTION * SHADOW_LIGHT_DISTANCE;
+        const glm::mat4 light_view = glm::lookAt(light_position, SHADOW_TARGET, glm::vec3(0.0f, 1.0f, 0.0f));
+        const glm::mat4 light_projection = glm::ortho(
+            -SHADOW_ORTHO_HALF_EXTENT, SHADOW_ORTHO_HALF_EXTENT,
+            -SHADOW_ORTHO_HALF_EXTENT, SHADOW_ORTHO_HALF_EXTENT,
+            SHADOW_NEAR_PLANE, SHADOW_FAR_PLANE);
+        return light_projection * light_view;
+    }
 
     int create_g_buffer_attachments(chr::GBufferResources* resources, int width, int height) {
         glGenFramebuffers(1, &resources->framebuffer);
@@ -120,6 +136,36 @@ namespace {
         return 0;
     }
 
+    int create_shadow_attachments(chr::GBufferResources* resources) {
+        glGenFramebuffers(1, &resources->shadow_framebuffer);
+        glBindFramebuffer(GL_FRAMEBUFFER, resources->shadow_framebuffer);
+
+        glGenTextures(1, &resources->shadow_texture_depth);
+        glBindTexture(GL_TEXTURE_2D, resources->shadow_texture_depth);
+        glTexImage2D(
+            GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24,
+            SHADOW_MAP_SIZE, SHADOW_MAP_SIZE, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+        constexpr float border_color[] = { 1.0f, 1.0f, 1.0f, 1.0f };
+        glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, border_color);
+        glFramebufferTexture2D(
+            GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, resources->shadow_texture_depth, 0);
+        glDrawBuffer(GL_NONE);
+        glReadBuffer(GL_NONE);
+
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            std::cout << "Err: Shadow framebuffer is incomplete." << std::endl;
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            return -1;
+        }
+
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        return 0;
+    }
+
     void clear_g_buffer_attachments(chr::GBufferResources* resources) {
         if (resources->texture_depth != 0) {
             glDeleteTextures(1, &resources->texture_depth);
@@ -144,6 +190,18 @@ namespace {
         resources->width = 0;
         resources->height = 0;
     }
+
+    void clear_shadow_attachments(chr::GBufferResources* resources) {
+        if (resources->shadow_texture_depth != 0) {
+            glDeleteTextures(1, &resources->shadow_texture_depth);
+            resources->shadow_texture_depth = 0;
+        }
+
+        if (resources->shadow_framebuffer != 0) {
+            glDeleteFramebuffers(1, &resources->shadow_framebuffer);
+            resources->shadow_framebuffer = 0;
+        }
+    }
 }
 
 namespace chr {
@@ -157,6 +215,10 @@ namespace chr {
         }
 
         if (create_g_buffer_attachments(this, width, height) != 0) {
+            clear();
+            return -1;
+        }
+        if (create_shadow_attachments(this) != 0) {
             clear();
             return -1;
         }
@@ -244,7 +306,10 @@ namespace chr {
         this->uniform_g_albedo = glGetUniformLocation(this->lighting_shader_program, "gAlbedo");
         this->uniform_g_normal = glGetUniformLocation(this->lighting_shader_program, "gNormal");
         this->uniform_g_depth = glGetUniformLocation(this->lighting_shader_program, "gDepth");
+        this->uniform_shadow_map = glGetUniformLocation(this->lighting_shader_program, "uShadowMap");
         this->uniform_inverse_projection = glGetUniformLocation(this->lighting_shader_program, "uInverseProjection");
+        this->uniform_inverse_view = glGetUniformLocation(this->lighting_shader_program, "uInverseView");
+        this->uniform_light_view_projection = glGetUniformLocation(this->lighting_shader_program, "uLightViewProjection");
         this->uniform_light_direction = glGetUniformLocation(this->lighting_shader_program, "uLightDirection");
         this->uniform_light_color = glGetUniformLocation(this->lighting_shader_program, "uLightColor");
         this->uniform_ambient_strength = glGetUniformLocation(this->lighting_shader_program, "uAmbientStrength");
@@ -393,10 +458,14 @@ namespace chr {
         }
 
         clear_g_buffer_attachments(this);
+        clear_shadow_attachments(this);
+        this->uniform_shadow_map = -1;
         this->uniform_g_albedo = -1;
         this->uniform_g_normal = -1;
         this->uniform_g_depth = -1;
         this->uniform_inverse_projection = -1;
+        this->uniform_inverse_view = -1;
+        this->uniform_light_view_projection = -1;
         this->uniform_light_direction = -1;
         this->uniform_light_color = -1;
         this->uniform_ambient_strength = -1;
@@ -419,12 +488,23 @@ namespace chr {
         glViewport(0, 0, this->width, this->height);
     }
 
+    glm::mat4 GBufferResources::get_directional_light_view_projection() const {
+        return get_directional_light_view_projection_matrix();
+    }
+
+    void GBufferResources::bind_for_shadow_pass() {
+        glBindFramebuffer(GL_FRAMEBUFFER, this->shadow_framebuffer);
+        glViewport(0, 0, SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
+    }
+
     void GBufferResources::draw_lighting_pass(const glm::mat4& mat_projection, const glm::mat4& mat_view) {
         bind_default_framebuffer(this->width, this->height);
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         const glm::mat4 inverse_projection = glm::inverse(mat_projection);
+        const glm::mat4 inverse_view = glm::inverse(mat_view);
+        const glm::mat4 light_view_projection = get_directional_light_view_projection_matrix();
         const glm::vec3 view_light_direction =
             glm::normalize(glm::mat3(mat_view) * LIGHT_DIRECTION);
 
@@ -432,7 +512,10 @@ namespace chr {
         glUniform1i(this->uniform_g_albedo, 0);
         glUniform1i(this->uniform_g_normal, 1);
         glUniform1i(this->uniform_g_depth, 2);
+        glUniform1i(this->uniform_shadow_map, 3);
         glUniformMatrix4fv(this->uniform_inverse_projection, 1, GL_FALSE, &inverse_projection[0][0]);
+        glUniformMatrix4fv(this->uniform_inverse_view, 1, GL_FALSE, &inverse_view[0][0]);
+        glUniformMatrix4fv(this->uniform_light_view_projection, 1, GL_FALSE, &light_view_projection[0][0]);
         glUniform3fv(this->uniform_light_direction, 1, &view_light_direction[0]);
         glUniform3fv(this->uniform_light_color, 1, &LIGHT_COLOR[0]);
         glUniform1f(this->uniform_ambient_strength, AMBIENT_STRENGTH);
@@ -453,6 +536,8 @@ namespace chr {
         glBindTexture(GL_TEXTURE_2D, this->texture_normal);
         glActiveTexture(GL_TEXTURE2);
         glBindTexture(GL_TEXTURE_2D, this->texture_depth);
+        glActiveTexture(GL_TEXTURE3);
+        glBindTexture(GL_TEXTURE_2D, this->shadow_texture_depth);
 
         glBindVertexArray(this->quad_vao);
         glDisable(GL_DEPTH_TEST);

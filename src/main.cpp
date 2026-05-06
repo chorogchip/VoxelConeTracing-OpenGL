@@ -20,6 +20,7 @@ constexpr const char* SPONZA_OBJ_RELATIVE_PATH = "assets/Sponza-master/sponza.ob
 
 chr::Camera camera{};
 bool show_debug_views = false;
+bool show_light_markers = true;
 
 int main() {
     glfwInit();
@@ -100,6 +101,9 @@ int main() {
         if (app_input::consume_toggle_debug_views_requested()) {
             show_debug_views = !show_debug_views;
         }
+        if (app_input::consume_toggle_light_markers_requested()) {
+            show_light_markers = !show_light_markers;
+        }
 
         int current_framebuffer_width = 0;
         int current_framebuffer_height = 0;
@@ -125,12 +129,21 @@ int main() {
         draw_params.mat_view = camera.get_view_matrix();
         draw_params.mat_model = glm::scale(glm::mat4(1.0f), glm::vec3(0.01f));
 
+        g_buffer_resources.bind_for_shadow_pass();
+        glClear(GL_DEPTH_BUFFER_BIT);
+        chr::render_scene_gpu_resources_shadow(
+            scene_gpu_resources,
+            draw_params.mat_model,
+            g_buffer_resources.get_directional_light_view_projection());
+
         g_buffer_resources.bind_for_geometry_pass();
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         chr::render_scene_gpu_resources(scene_gpu_resources, draw_params);
         g_buffer_resources.draw_lighting_pass(draw_params.mat_projection, draw_params.mat_view);
-        g_buffer_resources.draw_light_markers(draw_params.mat_projection, draw_params.mat_view);
+        if (show_light_markers) {
+            g_buffer_resources.draw_light_markers(draw_params.mat_projection, draw_params.mat_view);
+        }
         if (show_debug_views) {
             g_buffer_resources.draw_debug_views();
         }

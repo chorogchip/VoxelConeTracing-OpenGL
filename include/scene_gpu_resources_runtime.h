@@ -9,5 +9,9 @@ namespace chr {
     void render_scene_gpu_resources(
         const SceneGPUResources& resources,
         const SceneDrawParams& draw_params);
+    void render_scene_gpu_resources_shadow(
+        const SceneGPUResources& resources,
+        const glm::mat4& mat_model,
+        const glm::mat4& mat_light_view_projection);
 
 }

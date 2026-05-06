@@ -10,6 +10,8 @@
 namespace {
     constexpr const char* VERTEX_SHADER_PATH = "assets/shaders/scene.vert";
     constexpr const char* FRAGMENT_SHADER_PATH = "assets/shaders/scene.frag";
+    constexpr const char* SHADOW_VERTEX_SHADER_PATH = "assets/shaders/shadow_scene.vert";
+    constexpr const char* SHADOW_FRAGMENT_SHADER_PATH = "assets/shaders/shadow_scene.frag";
 
     uint32_t create_fallback_texture() {
         uint32_t texture = 0;
@@ -65,6 +67,45 @@ namespace chr {
         resources->uniform_view = glGetUniformLocation(resources->shader_program, "view");
         resources->uniform_projection = glGetUniformLocation(resources->shader_program, "projection");
         resources->uniform_texture_diffuse = glGetUniformLocation(resources->shader_program, "uTexture");
+        resources->uniform_texture_alpha_mask = glGetUniformLocation(resources->shader_program, "uAlphaMaskTexture");
+
+        unsigned shadow_vertex_shader = graphics_util::compile_shader_from_file(
+            GL_VERTEX_SHADER, SHADOW_VERTEX_SHADER_PATH);
+        if (shadow_vertex_shader == 0) {
+            clear_scene_gpu_resources(resources);
+            return -1;
+        }
+        unsigned shadow_fragment_shader = graphics_util::compile_shader_from_file(
+            GL_FRAGMENT_SHADER, SHADOW_FRAGMENT_SHADER_PATH);
+        if (shadow_fragment_shader == 0) {
+            glDeleteShader(shadow_vertex_shader);
+            clear_scene_gpu_resources(resources);
+            return -1;
+        }
+
+        resources->shadow_shader_program = glCreateProgram();
+        glAttachShader(resources->shadow_shader_program, shadow_vertex_shader);
+        glAttachShader(resources->shadow_shader_program, shadow_fragment_shader);
+        glLinkProgram(resources->shadow_shader_program);
+
+        glGetProgramiv(resources->shadow_shader_program, GL_LINK_STATUS, &succeed);
+        if (!succeed) {
+            char log_buf[512];
+            glGetProgramInfoLog(resources->shadow_shader_program, 512, nullptr, log_buf);
+            std::cout << "Err: Shadow shader program link failed: " << log_buf << std::endl;
+            glDeleteShader(shadow_vertex_shader);
+            glDeleteShader(shadow_fragment_shader);
+            clear_scene_gpu_resources(resources);
+            return -1;
+        }
+        glDeleteShader(shadow_vertex_shader);
+        glDeleteShader(shadow_fragment_shader);
+        resources->uniform_shadow_model = glGetUniformLocation(resources->shadow_shader_program, "model");
+        resources->uniform_shadow_light_view_projection =
+            glGetUniformLocation(resources->shadow_shader_program, "uLightViewProjection");
+        resources->uniform_shadow_texture_alpha_mask =
+            glGetUniformLocation(resources->shadow_shader_program, "uAlphaMaskTexture");
+
         resources->fallback_texture_diffuse = create_fallback_texture();
 
         for (const auto& mesh_raw : scene_raw.meshes) {
@@ -106,10 +147,12 @@ namespace chr {
         for (const auto& material_raw : scene_raw.materials) {
             const uint32_t texture_diffuse =
                 graphics_util::load_texture_2d(material_raw.texture_diffuse);
+            const uint32_t texture_alpha_mask =
+                graphics_util::load_texture_2d(material_raw.texture_alpha_mask);
             resources->materials.push_back({
                 texture_diffuse != 0 ? texture_diffuse : resources->fallback_texture_diffuse,
                 0,
-                0
+                texture_alpha_mask != 0 ? texture_alpha_mask : resources->fallback_texture_diffuse
             });
         }
 
@@ -129,6 +172,11 @@ namespace chr {
                 material.texture_diffuse != resources->fallback_texture_diffuse) {
                 glDeleteTextures(1, &material.texture_diffuse);
             }
+            if (material.texture_alpha_mask != 0 &&
+                material.texture_alpha_mask != resources->fallback_texture_diffuse &&
+                material.texture_alpha_mask != material.texture_diffuse) {
+                glDeleteTextures(1, &material.texture_alpha_mask);
+            }
         }
         resources->materials.clear();
 
@@ -141,11 +189,19 @@ namespace chr {
             glDeleteProgram(resources->shader_program);
             resources->shader_program = 0;
         }
+        if (resources->shadow_shader_program != 0) {
+            glDeleteProgram(resources->shadow_shader_program);
+            resources->shadow_shader_program = 0;
+        }
 
         resources->uniform_model = -1;
         resources->uniform_view = -1;
         resources->uniform_projection = -1;
         resources->uniform_texture_diffuse = -1;
+        resources->uniform_texture_alpha_mask = -1;
+        resources->uniform_shadow_model = -1;
+        resources->uniform_shadow_light_view_projection = -1;
+        resources->uniform_shadow_texture_alpha_mask = -1;
     }
 
     void render_scene_gpu_resources(
@@ -153,6 +209,7 @@ namespace chr {
         const SceneDrawParams& draw_params) {
         glUseProgram(resources.shader_program);
         glUniform1i(resources.uniform_texture_diffuse, 0);
+        glUniform1i(resources.uniform_texture_alpha_mask, 1);
         glUniformMatrix4fv(
             resources.uniform_model,
             1, GL_FALSE, &draw_params.mat_model[0][0]);
@@ -165,16 +222,50 @@ namespace chr {
 
         for (const auto& mesh : resources.meshes) {
             uint32_t texture_diffuse = resources.fallback_texture_diffuse;
+            uint32_t texture_alpha_mask = resources.fallback_texture_diffuse;
             if (mesh.material_index < resources.materials.size()) {
                 texture_diffuse = resources.materials[mesh.material_index].texture_diffuse;
+                texture_alpha_mask = resources.materials[mesh.material_index].texture_alpha_mask;
             }
 
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, texture_diffuse);
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, texture_alpha_mask);
             glBindVertexArray(mesh.VAO);
             glDrawElements(GL_TRIANGLES, mesh.index_count, GL_UNSIGNED_INT, nullptr);
         }
 
+        glActiveTexture(GL_TEXTURE0);
+        glBindVertexArray(0);
+    }
+
+    void render_scene_gpu_resources_shadow(
+        const SceneGPUResources& resources,
+        const glm::mat4& mat_model,
+        const glm::mat4& mat_light_view_projection) {
+        glUseProgram(resources.shadow_shader_program);
+        glUniform1i(resources.uniform_shadow_texture_alpha_mask, 0);
+        glUniformMatrix4fv(
+            resources.uniform_shadow_model,
+            1, GL_FALSE, &mat_model[0][0]);
+        glUniformMatrix4fv(
+            resources.uniform_shadow_light_view_projection,
+            1, GL_FALSE, &mat_light_view_projection[0][0]);
+
+        for (const auto& mesh : resources.meshes) {
+            uint32_t texture_alpha_mask = resources.fallback_texture_diffuse;
+            if (mesh.material_index < resources.materials.size()) {
+                texture_alpha_mask = resources.materials[mesh.material_index].texture_alpha_mask;
+            }
+
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, texture_alpha_mask);
+            glBindVertexArray(mesh.VAO);
+            glDrawElements(GL_TRIANGLES, mesh.index_count, GL_UNSIGNED_INT, nullptr);
+        }
+
+        glActiveTexture(GL_TEXTURE0);
         glBindVertexArray(0);
     }
 
