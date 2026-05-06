@@ -12,6 +12,8 @@
 namespace {
     constexpr const char* LIGHTING_VERTEX_SHADER_PATH = "assets/shaders/deferred_light.vert";
     constexpr const char* LIGHTING_FRAGMENT_SHADER_PATH = "assets/shaders/deferred_light.frag";
+    constexpr const char* SSAO_FRAGMENT_SHADER_PATH = "assets/shaders/ssao.frag";
+    constexpr const char* SSAO_BLUR_FRAGMENT_SHADER_PATH = "assets/shaders/ssao_blur.frag";
     constexpr const char* DEBUG_FRAGMENT_SHADER_PATH = "assets/shaders/debug_buffer.frag";
     constexpr const char* LIGHT_MARKER_VERTEX_SHADER_PATH = "assets/shaders/light_marker.vert";
     constexpr const char* LIGHT_MARKER_FRAGMENT_SHADER_PATH = "assets/shaders/light_marker.frag";
@@ -23,6 +25,8 @@ namespace {
     constexpr float SHADOW_FAR_PLANE = 60.0f;
     constexpr float SHADOW_LIGHT_DISTANCE = 24.0f;
     const glm::vec3 SHADOW_TARGET = glm::vec3(0.0f, 6.0f, 0.0f);
+    constexpr int SSAO_KERNEL_SIZE = 16;
+    constexpr int SSAO_NOISE_SIZE = 4;
     constexpr float AMBIENT_STRENGTH = 0.32f;
     constexpr float DIFFUSE_STRENGTH = 0.85f;
     constexpr int POINT_LIGHT_COUNT = 5;
@@ -66,6 +70,36 @@ namespace {
             8.0f,
             2.5f
         }
+    }};
+
+    const std::array<glm::vec3, SSAO_KERNEL_SIZE> SSAO_KERNEL = {{
+        glm::vec3(0.078f, 0.068f, 0.085f),
+        glm::vec3(-0.113f, 0.041f, 0.126f),
+        glm::vec3(0.042f, -0.099f, 0.159f),
+        glm::vec3(0.154f, 0.119f, 0.192f),
+        glm::vec3(-0.187f, -0.056f, 0.226f),
+        glm::vec3(0.238f, -0.144f, 0.261f),
+        glm::vec3(-0.052f, 0.265f, 0.308f),
+        glm::vec3(0.309f, 0.032f, 0.348f),
+        glm::vec3(-0.286f, 0.197f, 0.402f),
+        glm::vec3(0.128f, -0.332f, 0.446f),
+        glm::vec3(0.373f, 0.231f, 0.503f),
+        glm::vec3(-0.401f, -0.154f, 0.558f),
+        glm::vec3(0.214f, 0.427f, 0.612f),
+        glm::vec3(-0.486f, 0.091f, 0.688f),
+        glm::vec3(0.447f, -0.366f, 0.764f),
+        glm::vec3(-0.265f, 0.541f, 0.892f)
+    }};
+
+    const std::array<glm::vec3, SSAO_NOISE_SIZE * SSAO_NOISE_SIZE> SSAO_NOISE = {{
+        glm::vec3( 1.0f,  0.0f, 0.0f), glm::vec3(-1.0f,  0.0f, 0.0f),
+        glm::vec3( 0.0f,  1.0f, 0.0f), glm::vec3( 0.0f, -1.0f, 0.0f),
+        glm::vec3( 0.7f,  0.7f, 0.0f), glm::vec3(-0.7f,  0.7f, 0.0f),
+        glm::vec3( 0.7f, -0.7f, 0.0f), glm::vec3(-0.7f, -0.7f, 0.0f),
+        glm::vec3( 0.92f, 0.38f, 0.0f), glm::vec3(-0.92f, 0.38f, 0.0f),
+        glm::vec3( 0.92f,-0.38f, 0.0f), glm::vec3(-0.92f,-0.38f, 0.0f),
+        glm::vec3( 0.38f, 0.92f, 0.0f), glm::vec3(-0.38f, 0.92f, 0.0f),
+        glm::vec3( 0.38f,-0.92f, 0.0f), glm::vec3(-0.38f,-0.92f, 0.0f)
     }};
 
     glm::mat4 get_directional_light_view_projection_matrix() {
@@ -166,6 +200,60 @@ namespace {
         return 0;
     }
 
+    int create_ssao_attachments(chr::GBufferResources* resources, int width, int height) {
+        glGenFramebuffers(1, &resources->ssao_framebuffer);
+        glBindFramebuffer(GL_FRAMEBUFFER, resources->ssao_framebuffer);
+
+        glGenTextures(1, &resources->texture_ssao);
+        glBindTexture(GL_TEXTURE_2D, resources->texture_ssao);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, width, height, 0, GL_RED, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, resources->texture_ssao, 0);
+
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            std::cout << "Err: SSAO framebuffer is incomplete." << std::endl;
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            return -1;
+        }
+
+        glGenFramebuffers(1, &resources->ssao_blur_framebuffer);
+        glBindFramebuffer(GL_FRAMEBUFFER, resources->ssao_blur_framebuffer);
+
+        glGenTextures(1, &resources->texture_ssao_blur);
+        glBindTexture(GL_TEXTURE_2D, resources->texture_ssao_blur);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, width, height, 0, GL_RED, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, resources->texture_ssao_blur, 0);
+
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            std::cout << "Err: SSAO blur framebuffer is incomplete." << std::endl;
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            return -1;
+        }
+
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        return 0;
+    }
+
+    int create_ssao_noise_texture(chr::GBufferResources* resources) {
+        glGenTextures(1, &resources->texture_ssao_noise);
+        glBindTexture(GL_TEXTURE_2D, resources->texture_ssao_noise);
+        glTexImage2D(
+            GL_TEXTURE_2D, 0, GL_RGB16F,
+            SSAO_NOISE_SIZE, SSAO_NOISE_SIZE, 0, GL_RGB, GL_FLOAT, SSAO_NOISE.data());
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+        return 0;
+    }
+
     void clear_g_buffer_attachments(chr::GBufferResources* resources) {
         if (resources->texture_depth != 0) {
             glDeleteTextures(1, &resources->texture_depth);
@@ -202,6 +290,29 @@ namespace {
             resources->shadow_framebuffer = 0;
         }
     }
+
+    void clear_ssao_attachments(chr::GBufferResources* resources) {
+        if (resources->texture_ssao_noise != 0) {
+            glDeleteTextures(1, &resources->texture_ssao_noise);
+            resources->texture_ssao_noise = 0;
+        }
+        if (resources->texture_ssao_blur != 0) {
+            glDeleteTextures(1, &resources->texture_ssao_blur);
+            resources->texture_ssao_blur = 0;
+        }
+        if (resources->texture_ssao != 0) {
+            glDeleteTextures(1, &resources->texture_ssao);
+            resources->texture_ssao = 0;
+        }
+        if (resources->ssao_blur_framebuffer != 0) {
+            glDeleteFramebuffers(1, &resources->ssao_blur_framebuffer);
+            resources->ssao_blur_framebuffer = 0;
+        }
+        if (resources->ssao_framebuffer != 0) {
+            glDeleteFramebuffers(1, &resources->ssao_framebuffer);
+            resources->ssao_framebuffer = 0;
+        }
+    }
 }
 
 namespace chr {
@@ -222,6 +333,11 @@ namespace chr {
             clear();
             return -1;
         }
+        if (create_ssao_attachments(this, width, height) != 0) {
+            clear();
+            return -1;
+        }
+        create_ssao_noise_texture(this);
 
         constexpr float quad_vertices[] = {
             -1.0f, -1.0f, 0.0f, 0.0f,
@@ -307,6 +423,7 @@ namespace chr {
         this->uniform_g_normal = glGetUniformLocation(this->lighting_shader_program, "gNormal");
         this->uniform_g_depth = glGetUniformLocation(this->lighting_shader_program, "gDepth");
         this->uniform_shadow_map = glGetUniformLocation(this->lighting_shader_program, "uShadowMap");
+        this->uniform_ssao_map = glGetUniformLocation(this->lighting_shader_program, "uSsaoMap");
         this->uniform_inverse_projection = glGetUniformLocation(this->lighting_shader_program, "uInverseProjection");
         this->uniform_inverse_view = glGetUniformLocation(this->lighting_shader_program, "uInverseView");
         this->uniform_light_view_projection = glGetUniformLocation(this->lighting_shader_program, "uLightViewProjection");
@@ -326,6 +443,86 @@ namespace chr {
             snprintf(uniform_name, sizeof(uniform_name), "uPointLightRanges[%d]", i);
             this->uniform_point_light_ranges[i] = glGetUniformLocation(this->lighting_shader_program, uniform_name);
         }
+
+        const unsigned ssao_vertex_shader = graphics_util::compile_shader_from_file(
+            GL_VERTEX_SHADER, LIGHTING_VERTEX_SHADER_PATH);
+        if (ssao_vertex_shader == 0) {
+            clear();
+            return -1;
+        }
+        const unsigned ssao_fragment_shader = graphics_util::compile_shader_from_file(
+            GL_FRAGMENT_SHADER, SSAO_FRAGMENT_SHADER_PATH);
+        if (ssao_fragment_shader == 0) {
+            glDeleteShader(ssao_vertex_shader);
+            clear();
+            return -1;
+        }
+
+        this->ssao_shader_program = glCreateProgram();
+        glAttachShader(this->ssao_shader_program, ssao_vertex_shader);
+        glAttachShader(this->ssao_shader_program, ssao_fragment_shader);
+        glLinkProgram(this->ssao_shader_program);
+
+        succeed = 0;
+        glGetProgramiv(this->ssao_shader_program, GL_LINK_STATUS, &succeed);
+        if (!succeed) {
+            char log_buf[512];
+            glGetProgramInfoLog(this->ssao_shader_program, 512, nullptr, log_buf);
+            std::cout << "Err: SSAO shader link failed: " << log_buf << std::endl;
+            glDeleteShader(ssao_vertex_shader);
+            glDeleteShader(ssao_fragment_shader);
+            clear();
+            return -1;
+        }
+        glDeleteShader(ssao_vertex_shader);
+        glDeleteShader(ssao_fragment_shader);
+
+        this->uniform_ssao_g_normal = glGetUniformLocation(this->ssao_shader_program, "gNormal");
+        this->uniform_ssao_g_depth = glGetUniformLocation(this->ssao_shader_program, "gDepth");
+        this->uniform_ssao_noise_texture = glGetUniformLocation(this->ssao_shader_program, "uNoiseTexture");
+        this->uniform_ssao_projection = glGetUniformLocation(this->ssao_shader_program, "uProjection");
+        this->uniform_ssao_inverse_projection = glGetUniformLocation(this->ssao_shader_program, "uInverseProjection");
+        this->uniform_ssao_noise_scale = glGetUniformLocation(this->ssao_shader_program, "uNoiseScale");
+        for (int i = 0; i < SSAO_KERNEL_SIZE; ++i) {
+            char uniform_name[32];
+            snprintf(uniform_name, sizeof(uniform_name), "uSamples[%d]", i);
+            this->uniform_ssao_samples[i] = glGetUniformLocation(this->ssao_shader_program, uniform_name);
+        }
+
+        const unsigned ssao_blur_vertex_shader = graphics_util::compile_shader_from_file(
+            GL_VERTEX_SHADER, LIGHTING_VERTEX_SHADER_PATH);
+        if (ssao_blur_vertex_shader == 0) {
+            clear();
+            return -1;
+        }
+        const unsigned ssao_blur_fragment_shader = graphics_util::compile_shader_from_file(
+            GL_FRAGMENT_SHADER, SSAO_BLUR_FRAGMENT_SHADER_PATH);
+        if (ssao_blur_fragment_shader == 0) {
+            glDeleteShader(ssao_blur_vertex_shader);
+            clear();
+            return -1;
+        }
+
+        this->ssao_blur_shader_program = glCreateProgram();
+        glAttachShader(this->ssao_blur_shader_program, ssao_blur_vertex_shader);
+        glAttachShader(this->ssao_blur_shader_program, ssao_blur_fragment_shader);
+        glLinkProgram(this->ssao_blur_shader_program);
+
+        succeed = 0;
+        glGetProgramiv(this->ssao_blur_shader_program, GL_LINK_STATUS, &succeed);
+        if (!succeed) {
+            char log_buf[512];
+            glGetProgramInfoLog(this->ssao_blur_shader_program, 512, nullptr, log_buf);
+            std::cout << "Err: SSAO blur shader link failed: " << log_buf << std::endl;
+            glDeleteShader(ssao_blur_vertex_shader);
+            glDeleteShader(ssao_blur_fragment_shader);
+            clear();
+            return -1;
+        }
+        glDeleteShader(ssao_blur_vertex_shader);
+        glDeleteShader(ssao_blur_fragment_shader);
+
+        this->uniform_ssao_blur_texture = glGetUniformLocation(this->ssao_blur_shader_program, "uTexture");
 
         const unsigned debug_vertex_shader = graphics_util::compile_shader_from_file(
             GL_VERTEX_SHADER, LIGHTING_VERTEX_SHADER_PATH);
@@ -417,6 +614,12 @@ namespace chr {
             clear_g_buffer_attachments(this);
             return -1;
         }
+        clear_ssao_attachments(this);
+        if (create_ssao_attachments(this, width, height) != 0) {
+            clear_ssao_attachments(this);
+            return -1;
+        }
+        create_ssao_noise_texture(this);
 
         return 0;
     }
@@ -426,7 +629,14 @@ namespace chr {
             glDeleteProgram(this->debug_shader_program);
             this->debug_shader_program = 0;
         }
-
+        if (this->ssao_blur_shader_program != 0) {
+            glDeleteProgram(this->ssao_blur_shader_program);
+            this->ssao_blur_shader_program = 0;
+        }
+        if (this->ssao_shader_program != 0) {
+            glDeleteProgram(this->ssao_shader_program);
+            this->ssao_shader_program = 0;
+        }
         if (this->light_marker_shader_program != 0) {
             glDeleteProgram(this->light_marker_shader_program);
             this->light_marker_shader_program = 0;
@@ -459,7 +669,9 @@ namespace chr {
 
         clear_g_buffer_attachments(this);
         clear_shadow_attachments(this);
+        clear_ssao_attachments(this);
         this->uniform_shadow_map = -1;
+        this->uniform_ssao_map = -1;
         this->uniform_g_albedo = -1;
         this->uniform_g_normal = -1;
         this->uniform_g_depth = -1;
@@ -475,6 +687,14 @@ namespace chr {
         this->uniform_point_light_colors.fill(-1);
         this->uniform_point_light_intensities.fill(-1);
         this->uniform_point_light_ranges.fill(-1);
+        this->uniform_ssao_g_normal = -1;
+        this->uniform_ssao_g_depth = -1;
+        this->uniform_ssao_noise_texture = -1;
+        this->uniform_ssao_projection = -1;
+        this->uniform_ssao_inverse_projection = -1;
+        this->uniform_ssao_noise_scale = -1;
+        this->uniform_ssao_samples.fill(-1);
+        this->uniform_ssao_blur_texture = -1;
         this->uniform_marker_model = -1;
         this->uniform_marker_view = -1;
         this->uniform_marker_projection = -1;
@@ -498,11 +718,47 @@ namespace chr {
     }
 
     void GBufferResources::draw_lighting_pass(const glm::mat4& mat_projection, const glm::mat4& mat_view) {
+        const glm::vec2 noise_scale = glm::vec2(
+            static_cast<float>(this->width) / SSAO_NOISE_SIZE,
+            static_cast<float>(this->height) / SSAO_NOISE_SIZE);
+
+        glBindFramebuffer(GL_FRAMEBUFFER, this->ssao_framebuffer);
+        glViewport(0, 0, this->width, this->height);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glUseProgram(this->ssao_shader_program);
+        glUniform1i(this->uniform_ssao_g_normal, 0);
+        glUniform1i(this->uniform_ssao_g_depth, 1);
+        glUniform1i(this->uniform_ssao_noise_texture, 2);
+        glUniformMatrix4fv(this->uniform_ssao_projection, 1, GL_FALSE, &mat_projection[0][0]);
+        const glm::mat4 inverse_projection = glm::inverse(mat_projection);
+        glUniformMatrix4fv(this->uniform_ssao_inverse_projection, 1, GL_FALSE, &inverse_projection[0][0]);
+        glUniform2fv(this->uniform_ssao_noise_scale, 1, &noise_scale[0]);
+        for (int i = 0; i < SSAO_KERNEL_SIZE; ++i) {
+            glUniform3fv(this->uniform_ssao_samples[i], 1, &SSAO_KERNEL[i][0]);
+        }
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, this->texture_normal);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, this->texture_depth);
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, this->texture_ssao_noise);
+        glBindVertexArray(this->quad_vao);
+        glDisable(GL_DEPTH_TEST);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+
+        glBindFramebuffer(GL_FRAMEBUFFER, this->ssao_blur_framebuffer);
+        glViewport(0, 0, this->width, this->height);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glUseProgram(this->ssao_blur_shader_program);
+        glUniform1i(this->uniform_ssao_blur_texture, 0);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, this->texture_ssao);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+
         bind_default_framebuffer(this->width, this->height);
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        const glm::mat4 inverse_projection = glm::inverse(mat_projection);
         const glm::mat4 inverse_view = glm::inverse(mat_view);
         const glm::mat4 light_view_projection = get_directional_light_view_projection_matrix();
         const glm::vec3 view_light_direction =
@@ -513,6 +769,7 @@ namespace chr {
         glUniform1i(this->uniform_g_normal, 1);
         glUniform1i(this->uniform_g_depth, 2);
         glUniform1i(this->uniform_shadow_map, 3);
+        glUniform1i(this->uniform_ssao_map, 4);
         glUniformMatrix4fv(this->uniform_inverse_projection, 1, GL_FALSE, &inverse_projection[0][0]);
         glUniformMatrix4fv(this->uniform_inverse_view, 1, GL_FALSE, &inverse_view[0][0]);
         glUniformMatrix4fv(this->uniform_light_view_projection, 1, GL_FALSE, &light_view_projection[0][0]);
@@ -538,9 +795,10 @@ namespace chr {
         glBindTexture(GL_TEXTURE_2D, this->texture_depth);
         glActiveTexture(GL_TEXTURE3);
         glBindTexture(GL_TEXTURE_2D, this->shadow_texture_depth);
+        glActiveTexture(GL_TEXTURE4);
+        glBindTexture(GL_TEXTURE_2D, this->texture_ssao_blur);
 
         glBindVertexArray(this->quad_vao);
-        glDisable(GL_DEPTH_TEST);
         glDrawArrays(GL_TRIANGLES, 0, 6);
         glEnable(GL_DEPTH_TEST);
         glBindVertexArray(0);
@@ -568,7 +826,7 @@ namespace chr {
     }
 
     void GBufferResources::draw_debug_views() {
-        constexpr int preview_count = 3;
+        constexpr int preview_count = 4;
         const int padding = 16;
         const int preview_width = this->width / 5;
         const int preview_height = this->height / 5;
@@ -577,9 +835,10 @@ namespace chr {
         const uint32_t preview_textures[preview_count] = {
             this->texture_albedo,
             this->texture_normal,
-            this->texture_depth
+            this->texture_depth,
+            this->texture_ssao_blur
         };
-        const int preview_modes[preview_count] = { 0, 1, 2 };
+        const int preview_modes[preview_count] = { 0, 1, 2, 3 };
 
         glUseProgram(this->debug_shader_program);
         glUniform1i(this->uniform_debug_texture, 0);

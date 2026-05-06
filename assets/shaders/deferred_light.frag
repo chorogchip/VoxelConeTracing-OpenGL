@@ -8,6 +8,7 @@ uniform sampler2D gAlbedo;
 uniform sampler2D gNormal;
 uniform sampler2D gDepth;
 uniform sampler2D uShadowMap;
+uniform sampler2D uSsaoMap;
 uniform mat4 uInverseProjection;
 uniform mat4 uInverseView;
 uniform mat4 uLightViewProjection;
@@ -59,13 +60,14 @@ void main() {
     vec4 albedo = texture(gAlbedo, TexCoord);
     vec3 normal = normalize(texture(gNormal, TexCoord).rgb);
     float depth = texture(gDepth, TexCoord).r;
+    float ambient_occlusion = texture(uSsaoMap, TexCoord).r;
 
     vec3 view_pos = reconstruct_view_position(TexCoord, depth);
     vec3 light_dir = normalize(-uLightDirection);
     float lambert = max(dot(normal, light_dir), 0.0);
     float directional_shadow = calculate_directional_shadow(view_pos, normal);
 
-    vec3 ambient = uAmbientStrength * uLightColor;
+    vec3 ambient = ambient_occlusion * uAmbientStrength * uLightColor;
     vec3 diffuse = (1.0 - directional_shadow) * lambert * uDiffuseStrength * uLightColor;
     vec3 point_light_sum = vec3(0.0);
 

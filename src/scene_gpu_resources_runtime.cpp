@@ -13,7 +13,7 @@ namespace {
     constexpr const char* SHADOW_VERTEX_SHADER_PATH = "assets/shaders/shadow_scene.vert";
     constexpr const char* SHADOW_FRAGMENT_SHADER_PATH = "assets/shaders/shadow_scene.frag";
 
-    uint32_t create_fallback_texture() {
+    uint32_t create_fallback_texture(const unsigned char rgba[4]) {
         uint32_t texture = 0;
         glGenTextures(1, &texture);
         glBindTexture(GL_TEXTURE_2D, texture);
@@ -21,11 +21,9 @@ namespace {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-        constexpr unsigned char white_pixel[] = { 255, 255, 255, 255 };
         glTexImage2D(
             GL_TEXTURE_2D, 0, GL_RGBA,
-            1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, white_pixel);
+            1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
         return texture;
     }
 }
@@ -67,6 +65,7 @@ namespace chr {
         resources->uniform_view = glGetUniformLocation(resources->shader_program, "view");
         resources->uniform_projection = glGetUniformLocation(resources->shader_program, "projection");
         resources->uniform_texture_diffuse = glGetUniformLocation(resources->shader_program, "uTexture");
+        resources->uniform_texture_normal = glGetUniformLocation(resources->shader_program, "uNormalTexture");
         resources->uniform_texture_alpha_mask = glGetUniformLocation(resources->shader_program, "uAlphaMaskTexture");
 
         unsigned shadow_vertex_shader = graphics_util::compile_shader_from_file(
@@ -106,7 +105,10 @@ namespace chr {
         resources->uniform_shadow_texture_alpha_mask =
             glGetUniformLocation(resources->shadow_shader_program, "uAlphaMaskTexture");
 
-        resources->fallback_texture_diffuse = create_fallback_texture();
+        constexpr unsigned char white_pixel[] = { 255, 255, 255, 255 };
+        constexpr unsigned char flat_normal_pixel[] = { 128, 128, 255, 255 };
+        resources->fallback_texture_diffuse = create_fallback_texture(white_pixel);
+        resources->fallback_texture_normal = create_fallback_texture(flat_normal_pixel);
 
         for (const auto& mesh_raw : scene_raw.meshes) {
 
@@ -147,11 +149,13 @@ namespace chr {
         for (const auto& material_raw : scene_raw.materials) {
             const uint32_t texture_diffuse =
                 graphics_util::load_texture_2d(material_raw.texture_diffuse);
+            const uint32_t texture_normal =
+                graphics_util::load_texture_2d(material_raw.texture_normal);
             const uint32_t texture_alpha_mask =
                 graphics_util::load_texture_2d(material_raw.texture_alpha_mask);
             resources->materials.push_back({
                 texture_diffuse != 0 ? texture_diffuse : resources->fallback_texture_diffuse,
-                0,
+                texture_normal != 0 ? texture_normal : resources->fallback_texture_normal,
                 texture_alpha_mask != 0 ? texture_alpha_mask : resources->fallback_texture_diffuse
             });
         }
@@ -172,6 +176,12 @@ namespace chr {
                 material.texture_diffuse != resources->fallback_texture_diffuse) {
                 glDeleteTextures(1, &material.texture_diffuse);
             }
+            if (material.texture_normal != 0 &&
+                material.texture_normal != resources->fallback_texture_normal &&
+                material.texture_normal != material.texture_diffuse &&
+                material.texture_normal != material.texture_alpha_mask) {
+                glDeleteTextures(1, &material.texture_normal);
+            }
             if (material.texture_alpha_mask != 0 &&
                 material.texture_alpha_mask != resources->fallback_texture_diffuse &&
                 material.texture_alpha_mask != material.texture_diffuse) {
@@ -183,6 +193,10 @@ namespace chr {
         if (resources->fallback_texture_diffuse != 0) {
             glDeleteTextures(1, &resources->fallback_texture_diffuse);
             resources->fallback_texture_diffuse = 0;
+        }
+        if (resources->fallback_texture_normal != 0) {
+            glDeleteTextures(1, &resources->fallback_texture_normal);
+            resources->fallback_texture_normal = 0;
         }
 
         if (resources->shader_program != 0) {
@@ -198,6 +212,7 @@ namespace chr {
         resources->uniform_view = -1;
         resources->uniform_projection = -1;
         resources->uniform_texture_diffuse = -1;
+        resources->uniform_texture_normal = -1;
         resources->uniform_texture_alpha_mask = -1;
         resources->uniform_shadow_model = -1;
         resources->uniform_shadow_light_view_projection = -1;
@@ -209,7 +224,8 @@ namespace chr {
         const SceneDrawParams& draw_params) {
         glUseProgram(resources.shader_program);
         glUniform1i(resources.uniform_texture_diffuse, 0);
-        glUniform1i(resources.uniform_texture_alpha_mask, 1);
+        glUniform1i(resources.uniform_texture_normal, 1);
+        glUniform1i(resources.uniform_texture_alpha_mask, 2);
         glUniformMatrix4fv(
             resources.uniform_model,
             1, GL_FALSE, &draw_params.mat_model[0][0]);
@@ -222,15 +238,19 @@ namespace chr {
 
         for (const auto& mesh : resources.meshes) {
             uint32_t texture_diffuse = resources.fallback_texture_diffuse;
+            uint32_t texture_normal = resources.fallback_texture_normal;
             uint32_t texture_alpha_mask = resources.fallback_texture_diffuse;
             if (mesh.material_index < resources.materials.size()) {
                 texture_diffuse = resources.materials[mesh.material_index].texture_diffuse;
+                texture_normal = resources.materials[mesh.material_index].texture_normal;
                 texture_alpha_mask = resources.materials[mesh.material_index].texture_alpha_mask;
             }
 
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, texture_diffuse);
             glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, texture_normal);
+            glActiveTexture(GL_TEXTURE2);
             glBindTexture(GL_TEXTURE_2D, texture_alpha_mask);
             glBindVertexArray(mesh.VAO);
             glDrawElements(GL_TRIANGLES, mesh.index_count, GL_UNSIGNED_INT, nullptr);

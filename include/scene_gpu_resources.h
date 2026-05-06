@@ -34,10 +34,12 @@ namespace chr {
         uint32_t shader_program = 0;
         uint32_t shadow_shader_program = 0;
         uint32_t fallback_texture_diffuse = 0;
+        uint32_t fallback_texture_normal = 0;
         int uniform_model = -1;
         int uniform_view = -1;
         int uniform_projection = -1;
         int uniform_texture_diffuse = -1;
+        int uniform_texture_normal = -1;
         int uniform_texture_alpha_mask = -1;
         int uniform_shadow_model = -1;
         int uniform_shadow_light_view_projection = -1;

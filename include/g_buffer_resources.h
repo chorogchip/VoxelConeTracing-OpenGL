@@ -14,11 +14,18 @@ namespace chr {
         uint32_t texture_depth = 0;
         uint32_t shadow_framebuffer = 0;
         uint32_t shadow_texture_depth = 0;
+        uint32_t ssao_framebuffer = 0;
+        uint32_t ssao_blur_framebuffer = 0;
+        uint32_t texture_ssao = 0;
+        uint32_t texture_ssao_blur = 0;
+        uint32_t texture_ssao_noise = 0;
         uint32_t quad_vao = 0;
         uint32_t quad_vbo = 0;
         uint32_t light_marker_vao = 0;
         uint32_t light_marker_vbo = 0;
         uint32_t lighting_shader_program = 0;
+        uint32_t ssao_shader_program = 0;
+        uint32_t ssao_blur_shader_program = 0;
         uint32_t debug_shader_program = 0;
         uint32_t light_marker_shader_program = 0;
         int width = 0;
@@ -27,6 +34,7 @@ namespace chr {
         int uniform_g_normal = -1;
         int uniform_g_depth = -1;
         int uniform_shadow_map = -1;
+        int uniform_ssao_map = -1;
         int uniform_inverse_projection = -1;
         int uniform_inverse_view = -1;
         int uniform_light_view_projection = -1;
@@ -39,6 +47,17 @@ namespace chr {
         std::array<int, 5> uniform_point_light_colors = { -1, -1, -1, -1, -1 };
         std::array<int, 5> uniform_point_light_intensities = { -1, -1, -1, -1, -1 };
         std::array<int, 5> uniform_point_light_ranges = { -1, -1, -1, -1, -1 };
+        int uniform_ssao_g_normal = -1;
+        int uniform_ssao_g_depth = -1;
+        int uniform_ssao_noise_texture = -1;
+        int uniform_ssao_projection = -1;
+        int uniform_ssao_inverse_projection = -1;
+        int uniform_ssao_noise_scale = -1;
+        std::array<int, 16> uniform_ssao_samples = {
+            -1, -1, -1, -1, -1, -1, -1, -1,
+            -1, -1, -1, -1, -1, -1, -1, -1
+        };
+        int uniform_ssao_blur_texture = -1;
         int uniform_marker_model = -1;
         int uniform_marker_view = -1;
         int uniform_marker_projection = -1;
